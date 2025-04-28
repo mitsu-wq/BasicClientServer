@@ -2,9 +2,8 @@ import threading
 import socket
 from concurrent.futures import ThreadPoolExecutor
 from logging import getLogger, DEBUG
-from typing import Callable
-from BasicClientServer.MessageUtils import MessageConverter, MessageType
-from BasicClientServer.MessageHandler import MessageHandler
+from .MessageRegistry import MessageRegistry, MessageType
+from .MessageConverter import MessageConverter
 
 class BasicServer:
     def __init__(self):
@@ -14,10 +13,18 @@ class BasicServer:
         self.listen_clients_multithread = None
         self.clients_thread = None
         self.active_futures = []
+        self.registry = MessageRegistry()
+        self._initialize_handlers()
         self.logger = getLogger("Server")
         self.logger.setLevel(DEBUG)
-        self.message_handler = MessageHandler(owner=self, is_server=True)
         self.logger.info("Server initialized")
+
+    def _initialize_handlers(self):
+        """Initializes handlers based on decorated methods."""
+        for cls in self.__class__.__mro__[:-1]:  # Exclude object
+            for name, method in cls.__dict__.items():
+                if hasattr(method, '_message_handler'):
+                    self.registry.register_handler(method.__get__(self, self.__class__))
         
     def open(self, port: int, ip: str = '0.0.0.0', max_clients: int = 1):
         try:
@@ -78,37 +85,41 @@ class BasicServer:
         try:
             while not self.stop_clients_thread_flag.is_set():
                 try:
-                    header = client.recv(MessageConverter.HEADER_SIZE)
-                    if not header:
+                    raw_data = client.recv(MessageConverter.HEADER_SIZE + MessageConverter.MAX_LENGTH)
+                    if not raw_data:
                         self.logger.info(f"Client {addr} disconnected")
                         break
-                    raw_data = header + client.recv(MessageConverter.MAX_LENGTH) if len(header) == MessageConverter.HEADER_SIZE else b""
+                    self.logger.debug(f"Recieved data: {raw_data}")
                     msg_type, data = MessageConverter.decode_message(raw_data)
                     if msg_type is None:
                         self.logger.warning(f"Invalid message from {addr}")
                         client.send(MessageConverter.encode_message(MessageType.ERROR))
                         break
                     self.logger.info(f"Message from {addr} - type: {msg_type}, data: {data[:50]}")
-                    response = self.message_handler.process_message(msg_type, data)
-                    client.send(response)
+                    response = self.registry.process(msg_type, data)
+                    self.logger.debug(f"Response: {response}")
+                    if response is not None:
+                        client.send(MessageConverter.encode_message(msg_type, response))
+                    else:
+                        client.send(MessageConverter.encode_message(MessageType.ERROR))
                 except socket.timeout:
                     self.logger.warning(f"Timeout waiting for message from {addr}")
+                    client.send(MessageConverter.encode_message(MessageType.ERROR))
                     break
                 except Exception as e:
                     self.logger.error(f"Failed processing connection {addr}: {e}")
+                    client.send(MessageConverter.encode_message(MessageType.ERROR))
                     break
         finally:
             try:
                 client.close()
             except:
                 pass
-
-    def register_message_handler(self, msg_type: MessageType, handler: Callable[[bytes], bytes]):
-        """
-        Register a message handler for a specific message type.
-        
-        Args:
-            msg_type: The message type to handle.
-            handler: Function that takes data (bytes) and returns response (bytes).
-        """
-        self.message_handler.register_handler(msg_type, handler, is_server=True)
+    
+    @MessageRegistry.handler("CHECK")
+    def _check(self, data: bytes):
+        return data
+    
+    @MessageRegistry.handler("ERROR")
+    def _error(self, data: bytes):
+        self.logger.error(f"Error: {data}")
