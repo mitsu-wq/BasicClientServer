@@ -1,31 +1,21 @@
 import threading
 import socket
 from concurrent.futures import ThreadPoolExecutor
-from logging import getLogger, DEBUG
 from .MessageRegistry import MessageRegistry, MessageType
 from .MessageConverter import MessageConverter
+from .NetworkComponent import NetworkComponent
+from .NetworkConfig import NetworkConfig
 
-class BasicServer:
+class BasicServer(NetworkComponent):
     def __init__(self):
+        super().__init__()
         self.init_flag = False
         self.socket = None
         self.stop_clients_thread_flag = threading.Event()
         self.listen_clients_multithread = None
         self.clients_thread = None
         self.active_futures = []
-        self.registry = MessageRegistry()
-        self._initialize_handlers()
-        self.logger = getLogger("Server")
-        self.logger.setLevel(DEBUG)
-        self.logger.info("Server initialized")
 
-    def _initialize_handlers(self):
-        """Initializes handlers based on decorated methods."""
-        for cls in self.__class__.__mro__[:-1]:  # Exclude object
-            for name, method in cls.__dict__.items():
-                if hasattr(method, '_message_handler'):
-                    self.registry.register_handler(method.__get__(self, self.__class__))
-        
     def open(self, port: int, ip: str = '0.0.0.0', max_clients: int = 1):
         try:
             self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -85,30 +75,30 @@ class BasicServer:
         try:
             while not self.stop_clients_thread_flag.is_set():
                 try:
-                    raw_data = client.recv(MessageConverter.HEADER_SIZE + MessageConverter.MAX_LENGTH)
+                    raw_data = client.recv(NetworkConfig.HEADER_SIZE + NetworkConfig.MAX_LENGTH)
                     if not raw_data:
                         self.logger.info(f"Client {addr} disconnected")
                         break
-                    self.logger.debug(f"Recieved data: {raw_data}")
+                    self.logger.debug(f"Received data: {raw_data}")
                     msg_type, data = MessageConverter.decode_message(raw_data)
                     if msg_type is None:
                         self.logger.warning(f"Invalid message from {addr}")
-                        client.send(MessageConverter.encode_message(MessageType.ERROR))
+                        self._send_message(client, MessageType.ERROR)
                         break
                     self.logger.info(f"Message from {addr} - type: {msg_type}, data: {data[:50]}")
                     response = self.registry.process(msg_type, data)
                     self.logger.debug(f"Response: {response}")
                     if response is not None:
-                        client.send(MessageConverter.encode_message(msg_type, response))
+                        self._send_message(client, msg_type, response)
                     else:
-                        client.send(MessageConverter.encode_message(MessageType.ERROR))
+                        self._send_message(client, MessageType.ERROR)
                 except socket.timeout:
                     self.logger.warning(f"Timeout waiting for message from {addr}")
-                    client.send(MessageConverter.encode_message(MessageType.ERROR))
+                    self._send_message(client, MessageType.ERROR)
                     break
                 except Exception as e:
                     self.logger.error(f"Failed processing connection {addr}: {e}")
-                    client.send(MessageConverter.encode_message(MessageType.ERROR))
+                    self._send_message(client, MessageType.ERROR)
                     break
         finally:
             try:
@@ -122,4 +112,4 @@ class BasicServer:
     
     @MessageRegistry.handler("ERROR")
     def _error(self, data: bytes):
-        self.logger.error(f"Error: {data}")
+        self._handle_error(data)

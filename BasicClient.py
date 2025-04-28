@@ -1,27 +1,17 @@
 import socket
 from typing import Optional
-from logging import getLogger, DEBUG
+from .NetworkComponent import NetworkComponent
 from .MessageRegistry import MessageType, MessageRegistry
 from .MessageConverter import MessageConverter
+from .NetworkConfig import NetworkConfig
 
-class BasicClient:
+class BasicClient(NetworkComponent):
     def __init__(self):
+        super().__init__()
         self.init_flag = False
         self.socket = None
         self.ip = None
         self.port = None
-        self.registry = MessageRegistry()
-        self._initialize_handlers()
-        self.logger = getLogger("Client")
-        self.logger.setLevel(DEBUG)
-        self.logger.info("Client initialized")
-    
-    def _initialize_handlers(self):
-        """Initializes handlers based on decorated methods."""
-        for cls in self.__class__.__mro__[:-1]:  # Exclude object
-            for name, method in cls.__dict__.items():
-                if hasattr(method, '_message_handler'):
-                    self.registry.register_handler(method.__get__(self, self.__class__))
 
     def open(self, ip: str, port: int) -> bool:
         try:
@@ -54,20 +44,15 @@ class BasicClient:
         if not self.init_flag:
             self.logger.error("Not connected to server")
             return None
-        try:
-            msg = MessageConverter.encode_message(message_type, data)
-            self.socket.send(msg)
-            self.logger.info(f"Send data to {self.ip}:{self.port} - type: {message_type}, data: {data[:50]}")
+        if self._send_message(self.socket, message_type, data):
             return self.get_message()
-        except Exception as e:
-            self.logger.error(f"Failed to send data: {e}")
-            return None
+        return None
 
     def get_message(self) -> Optional[object]:
         if not self.init_flag:
             return None
         try:
-            raw_data = self.socket.recv(MessageConverter.HEADER_SIZE + MessageConverter.MAX_LENGTH)
+            raw_data = self.socket.recv(NetworkConfig.HEADER_SIZE + NetworkConfig.MAX_LENGTH)
             if not raw_data:
                 self.logger.info("Server disconnected")
                 return None
@@ -85,12 +70,11 @@ class BasicClient:
             return None
     
     @MessageRegistry.handler("CHECK")
-    def _check(self, data: bytes) -> bool:
+    def _check(self, data: bytes):
         if not self.init_flag:
             return None
         return data
     
     @MessageRegistry.handler("ERROR")
-    def _error(self, data: bytes):
-        self.logger.error(f"Error: {data}")
-        return None
+    def _error(self, data: bytes) -> None:
+        self._handle_error(data)
