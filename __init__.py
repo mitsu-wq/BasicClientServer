@@ -1,3 +1,13 @@
+"""Basic client-server network communication framework.
+
+This package provides a simple framework for building client-server applications
+with custom message types and handlers. It includes:
+- BasicServer: Server implementation for handling multiple clients
+- BasicClient: Client implementation for connecting to servers
+- MessageRegistry: Message type registration and handling
+- MessageConverter: Message encoding/decoding utilities
+"""
+
 import logging.config
 from json import load
 import os

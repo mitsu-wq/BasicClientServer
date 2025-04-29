@@ -7,7 +7,10 @@ from .NetworkComponent import NetworkComponent
 from .NetworkConfig import NetworkConfig
 
 class BasicServer(NetworkComponent):
+    """Server implementation for handling multiple client connections."""
+    
     def __init__(self):
+        """Initialize server with empty connection state and thread management."""
         super().__init__()
         self.init_flag = False
         self.socket = None
@@ -17,6 +20,7 @@ class BasicServer(NetworkComponent):
         self.active_futures = []
 
     def open(self, port: int, ip: str = '0.0.0.0', max_clients: int = 1):
+        """Start server on specified port and IP. Returns True if successful."""
         try:
             self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -35,6 +39,7 @@ class BasicServer(NetworkComponent):
             return False
 
     def close(self):
+        """Stop server and close all client connections."""
         try:
             if self.init_flag:
                 self.stop_clients_thread_flag.set()
@@ -56,6 +61,7 @@ class BasicServer(NetworkComponent):
             self.active_futures = []
 
     def get_clients_thread(self):
+        """Main thread for accepting new client connections."""
         while not self.stop_clients_thread_flag.is_set():
             try:
                 self.socket.settimeout(1.0)
@@ -72,6 +78,7 @@ class BasicServer(NetworkComponent):
                 break
 
     def client_read_thread(self, client, addr):
+        """Thread for handling individual client communication."""
         try:
             while not self.stop_clients_thread_flag.is_set():
                 try:
@@ -108,8 +115,10 @@ class BasicServer(NetworkComponent):
     
     @MessageRegistry.handler("CHECK")
     def _check(self, data: bytes):
+        """Handle CHECK message type by echoing back the data."""
         return data
     
     @MessageRegistry.handler("ERROR")
     def _error(self, data: bytes):
+        """Handle ERROR message type by logging the error."""
         self._handle_error(data)

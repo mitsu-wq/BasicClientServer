@@ -6,7 +6,10 @@ from .MessageConverter import MessageConverter
 from .NetworkConfig import NetworkConfig
 
 class BasicClient(NetworkComponent):
+    """Client implementation for network communication."""
+    
     def __init__(self):
+        """Initialize client with empty connection state."""
         super().__init__()
         self.init_flag = False
         self.socket = None
@@ -14,6 +17,7 @@ class BasicClient(NetworkComponent):
         self.port = None
 
     def open(self, ip: str, port: int) -> bool:
+        """Connect to server at specified IP and port. Returns True if successful."""
         try:
             self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.socket.connect((ip, port))
@@ -27,6 +31,7 @@ class BasicClient(NetworkComponent):
             return False
 
     def close(self):
+        """Close connection to server. Returns True if successful."""
         if self.socket:
             try:
                 self.socket.close()
@@ -41,6 +46,7 @@ class BasicClient(NetworkComponent):
         return True
 
     def send_data(self, message_type: MessageType, data: bytes = b""):
+        """Send data to server and wait for response. Returns response or None on error."""
         if not self.init_flag:
             self.logger.error("Not connected to server")
             return None
@@ -49,6 +55,7 @@ class BasicClient(NetworkComponent):
         return None
 
     def get_message(self) -> Optional[object]:
+        """Receive and process next message from server. Returns None on error or timeout."""
         if not self.init_flag:
             return None
         try:
@@ -71,10 +78,12 @@ class BasicClient(NetworkComponent):
     
     @MessageRegistry.handler("CHECK")
     def _check(self, data: bytes):
+        """Handle CHECK message type. Returns data if connected."""
         if not self.init_flag:
             return None
         return data
     
     @MessageRegistry.handler("ERROR")
     def _error(self, data: bytes) -> None:
+        """Handle ERROR message type by logging the error."""
         self._handle_error(data)
