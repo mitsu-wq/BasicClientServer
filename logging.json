@@ -25,16 +25,6 @@
       "level": "DEBUG",
       "handlers": ["console"],
       "propagate": false
-    },
-    "MessageConverter": {
-      "level": "DEBUG",
-      "handlers": ["console"],
-      "propagate": false
-    },
-    "MessageHandler": {
-      "level": "DEBUG",
-      "handlers": ["console"],
-      "propagate": false
     }
   },
   "root": {
