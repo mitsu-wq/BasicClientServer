@@ -58,6 +58,7 @@ class BasicClient(NetworkComponent):
         """Receive and process next message from server. Returns None on error or timeout."""
         if not self.init_flag:
             return None
+        self.socket.settimeout(5.0)
         try:
             raw_data = self.socket.recv(NetworkConfig.HEADER_SIZE + NetworkConfig.MAX_LENGTH)
             if not raw_data:

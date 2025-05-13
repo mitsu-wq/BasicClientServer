@@ -18,6 +18,7 @@ class BasicServer(NetworkComponent):
         self.listen_clients_multithread = None
         self.clients_thread = None
         self.active_futures = []
+        self.futures_lock = threading.Lock()
 
     def open(self, port: int, ip: str = '0.0.0.0', max_clients: int = 1):
         """Start server on specified port and IP. Returns True if successful."""
@@ -68,7 +69,9 @@ class BasicServer(NetworkComponent):
                 client, addr = self.socket.accept()
                 self.logger.info(f"Connection from {addr}")
                 future = self.listen_clients_multithread.submit(self.client_read_thread, client, addr)
-                self.active_futures.append(future)
+                with self.futures_lock:
+                    self.active_futures.append(future)
+                    self.active_futures = [f for f in self.active_futures if not f.done()]
                 self.logger.debug(f"Submitted task for {addr}, active futures: {len([f for f in self.active_futures if not f.done()])}")
             except socket.timeout:
                 continue
@@ -98,14 +101,16 @@ class BasicServer(NetworkComponent):
                     if response is not None:
                         self._send_message(client, msg_type, response)
                     else:
-                        self._send_message(client, MessageType.ERROR)
+                        self._send_message(client, MessageType.ERROR, b"Invalid message")
                 except socket.timeout:
-                    self.logger.warning(f"Timeout waiting for message from {addr}")
-                    self._send_message(client, MessageType.ERROR)
+                    message = "Timeout waiting for message"
+                    self.logger.warning(f"{message} from {addr}")
+                    self._send_message(client, MessageType.ERROR, message.encode())
                     break
                 except Exception as e:
-                    self.logger.error(f"Failed processing connection {addr}: {e}")
-                    self._send_message(client, MessageType.ERROR)
+                    message = "Failed processing connection"
+                    self.logger.error(f"{message} {addr}: {e}")
+                    self._send_message(client, MessageType.ERROR, f"{message}: {e}".encode())
                     break
         finally:
             try:
