@@ -74,8 +74,8 @@ class MessageRegistry:
             if message_type:
                 self.handlers[message_type] = func
 
-    def process(self, message_type: Union[str, MessageType], *args, **kwargs):
-        """Invokes the handler for the specified message type."""
+    async def process(self, message_type: Union[str, MessageType], *args, **kwargs):
+        """Invokes the handler for the specified message type asynchronously."""
         if isinstance(message_type, str):
             message_type = MessageType.get(message_type)
         if not message_type:
@@ -83,4 +83,4 @@ class MessageRegistry:
         handler = self.handlers.get(message_type)
         if not handler:
             raise ValueError(f"No handler for message type: {message_type}")
-        return handler(*args, **kwargs)
+        return await handler(*args, **kwargs)

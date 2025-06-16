@@ -1,5 +1,4 @@
-import threading
-import socket
+import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from .MessageRegistry import MessageRegistry, MessageType
 from .MessageConverter import MessageConverter
@@ -10,28 +9,22 @@ class BasicServer(NetworkComponent):
     """Server implementation for handling multiple client connections."""
     
     def __init__(self):
-        """Initialize server with empty connection state and thread management."""
+        """Initialize server with empty connection state."""
         super().__init__()
         self.init_flag = False
-        self.socket = None
-        self.stop_clients_thread_flag = threading.Event()
-        self.listen_clients_multithread = None
-        self.clients_thread = None
-        self.active_futures = []
-        self.futures_lock = threading.Lock()
+        self.server = None
+        self.active_tasks = []
+        self.loop = asyncio.get_event_loop()
 
-    def open(self, port: int, ip: str = '0.0.0.0', max_clients: int = 1):
+    async def open(self, port: int, ip: str = '0.0.0.0', max_clients: int = 1):
         """Start server on specified port and IP. Returns True if successful."""
         try:
-            self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            self.socket.bind((ip, port))
-            self.socket.listen(max_clients)
-            self.stop_clients_thread_flag.clear()
-            self.listen_clients_multithread = ThreadPoolExecutor(max_workers=max_clients)
-            self.clients_thread = threading.Thread(target=self.get_clients_thread)
-            self.clients_thread.daemon = True
-            self.clients_thread.start()
+            self.server = await asyncio.start_server(
+                self.client_read_task,
+                ip,
+                port,
+                limit=NetworkConfig.MAX_LENGTH + NetworkConfig.HEADER_SIZE
+            )
             self.init_flag = True
             self.logger.info(f"Server started on {ip}:{port}")
             return True
@@ -39,91 +32,76 @@ class BasicServer(NetworkComponent):
             self.logger.error(f"Failed to start server: {e}")
             return False
 
-    def close(self):
+    async def close(self):
         """Stop server and close all client connections."""
         try:
             if self.init_flag:
-                self.stop_clients_thread_flag.set()
-                if self.socket:
-                    self.socket.close()
-                if self.listen_clients_multithread:
-                    self.logger.info(f"Active futures before shutdown: {len([f for f in self.active_futures if not f.done()])}")
-                    self.listen_clients_multithread.shutdown(wait=True)
-                if self.clients_thread:
-                    self.clients_thread.join()
+                self.server.close()
+                await self.server.wait_closed()
+                for task in self.active_tasks:
+                    task.cancel()
+                await asyncio.gather(*self.active_tasks, return_exceptions=True)
+                self.active_tasks = []
                 self.init_flag = False
                 self.logger.info("Server closed")
         except Exception as e:
             self.logger.error(f"Error closing server: {e}")
         finally:
-            self.socket = None
-            self.listen_clients_multithread = None
-            self.clients_thread = None
-            self.active_futures = []
+            self.server = None
 
-    def get_clients_thread(self):
-        """Main thread for accepting new client connections."""
-        while not self.stop_clients_thread_flag.is_set():
-            try:
-                self.socket.settimeout(1.0)
-                client, addr = self.socket.accept()
-                self.logger.info(f"Connection from {addr}")
-                future = self.listen_clients_multithread.submit(self.client_read_thread, client, addr)
-                with self.futures_lock:
-                    self.active_futures.append(future)
-                    self.active_futures = [f for f in self.active_futures if not f.done()]
-                self.logger.debug(f"Submitted task for {addr}, active futures: {len([f for f in self.active_futures if not f.done()])}")
-            except socket.timeout:
-                continue
-            except Exception as e:
-                if not self.stop_clients_thread_flag.is_set():
-                    self.logger.error(f"Error accepting connection: {e}")
-                break
-
-    def client_read_thread(self, client, addr):
-        """Thread for handling individual client communication."""
+    async def client_read_task(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
+        """Handle individual client communication."""
+        addr = writer.get_extra_info("peername")
+        self.logger.info(f"Connection from {addr}")
+        task = asyncio.current_task()
+        self.active_tasks.append(task)
         try:
-            while not self.stop_clients_thread_flag.is_set():
+            while True:
                 try:
-                    raw_data = client.recv(NetworkConfig.HEADER_SIZE + NetworkConfig.MAX_LENGTH)
+                    raw_data = await asyncio.wait_for(
+                        reader.read(NetworkConfig.HEADER_SIZE + NetworkConfig.MAX_LENGTH),
+                        timeout=5.0
+                    )
                     if not raw_data:
-                        self.logger.info(f"Client {addr} disconnected")
+                        self.logger.info(f"Client {addr} disconnected.")
                         break
                     self.logger.debug(f"Received data: {raw_data}")
                     msg_type, data = MessageConverter.decode_message(raw_data)
                     if msg_type is None:
                         self.logger.warning(f"Invalid message from {addr}")
-                        self._send_message(client, MessageType.ERROR)
+                        await self._send_message(writer, MessageType.ERROR, b"Invalid message")
                         break
                     self.logger.info(f"Message from {addr} - type: {msg_type}, data: {data[:50]}")
-                    response = self.registry.process(msg_type, data)
+                    response = await self.registry.process(msg_type, data)
                     self.logger.debug(f"Response: {response}")
                     if response is not None:
-                        self._send_message(client, msg_type, response)
+                        await self._send_message(writer, msg_type, response)
                     else:
-                        self._send_message(client, MessageType.ERROR, b"Invalid message")
-                except socket.timeout:
+                        await self._send_message(writer, MessageType.ERROR, b"Invalid message")
+                except asyncio.TimeoutError:
                     message = "Timeout waiting for message"
                     self.logger.warning(f"{message} from {addr}")
-                    self._send_message(client, MessageType.ERROR, message.encode())
+                    await self._send_message(writer, MessageType.ERROR, message.encode())
                     break
                 except Exception as e:
                     message = "Failed processing connection"
                     self.logger.error(f"{message} {addr}: {e}")
-                    self._send_message(client, MessageType.ERROR, f"{message}: {e}".encode())
+                    await self._send_message(writer, MessageType.ERROR, f"{message}: {e}".encode())
                     break
         finally:
             try:
-                client.close()
+                writer.close()
+                await writer.wait_closed()
             except:
                 pass
+            self.active_tasks.remove(task)
     
     @MessageRegistry.handler("CHECK")
-    def _check(self, data: bytes):
+    async def _check(self, data: bytes):
         """Handle CHECK message type by echoing back the data."""
         return data
     
     @MessageRegistry.handler("ERROR")
-    def _error(self, data: bytes):
+    async def _error(self, data: bytes):
         """Handle ERROR message type by logging the error."""
         self._handle_error(data)

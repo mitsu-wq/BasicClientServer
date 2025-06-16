@@ -1,11 +1,11 @@
-import socket
+import asyncio
 from logging import DEBUG, getLogger
 from .MessageRegistry import MessageRegistry, MessageType
 from .MessageConverter import MessageConverter
 
 
 class NetworkComponent:
-    """Base class for network communication components (client and server)."""
+    """Base class for network communication components."""
     
     def __init__(self):
         """Initialize the network component with registry and logger."""
@@ -26,11 +26,12 @@ class NetworkComponent:
         """Log error messages received from the network."""
         self.logger.error(f"Error: {data}")
     
-    def _send_message(self, sock: socket.socket, message_type: MessageType, data: bytes = b"") -> bool:
-        """Send a message through the socket. Returns True if successful."""
+    async def _send_message(self, writer: asyncio.StreamWriter, message_type: MessageType, data: bytes = b"") -> bool:
+        """Send a message through the async writer. Returns True if successful."""
         try:
             msg = MessageConverter.encode_message(message_type, data)
-            sock.send(msg)
+            writer.write(msg)
+            await writer.drain()
             self.logger.info(f"Sent message - type: {message_type}, data: {data[:50]}")
             return True
         except Exception as e:
